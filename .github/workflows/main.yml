@@ -27,21 +27,25 @@ jobs:
         with:
           gradle-version: '8.6'
 
-      - name: 5. Komandir APK ilovasini yig'ish
-        working-directory: ./3-android-komandir-apk
+      - name: 5. Komandir va Askar APK ilovalarini yig'ish
         run: |
+          KOMANDIR_DIR=$(find . -type d -name "3-android-komandir-apk" | head -n 1)
+          ASKAR_DIR=$(find . -type d -name "4-android-askar-apk" | head -n 1)
+
+          echo "Found Komandir dir: $KOMANDIR_DIR"
+          echo "Found Askar dir: $ASKAR_DIR"
+
+          cd "$KOMANDIR_DIR"
           printf "android.useAndroidX=true\nandroid.nonTransitiveRClass=true\norg.gradle.jvmargs=-Xmx2048m\n" > gradle.properties
           gradle assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk ../SignalNet-Komandir.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/SignalNet-Komandir.apk"
 
-      - name: 6. Askar APK ilovasini yig'ish
-        working-directory: ./4-android-askar-apk
-        run: |
+          cd "$GITHUB_WORKSPACE/$ASKAR_DIR"
           printf "android.useAndroidX=true\nandroid.nonTransitiveRClass=true\norg.gradle.jvmargs=-Xmx2048m\n" > gradle.properties
           gradle assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk ../SignalNet-Askar.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/SignalNet-Askar.apk"
 
-      - name: 7. Tayyor APK fayllarni yuklab olish uchun saqlash
+      - name: 6. Tayyor APK fayllarni yuklab olish uchun saqlash
         uses: actions/upload-artifact@v4
         with:
           name: SignalNet-Tayyor-APK-Fayllar
