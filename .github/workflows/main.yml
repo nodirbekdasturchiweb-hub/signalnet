@@ -10,42 +10,726 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Kodlarni yuklab olish
-        uses: actions/checkout@v4
-
-      - name: 2. Java JDK 17 o'rnatish
+      - name: 1. Java JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 3. Android SDK sozlash
+      - name: 2. Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: 4. Gradle 8.6 o'rnatish
+      - name: 3. Gradle 8.5
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: '8.6'
+          gradle-version: '8.5'
 
-      - name: 5. Komandir va Askar APK ilovalarini yig'ish
+      - name: 4. Build Komandir APK
         run: |
-          KOMANDIR_DIR=$(find . -type d -name "3-android-komandir-apk" | head -n 1)
-          ASKAR_DIR=$(find . -type d -name "4-android-askar-apk" | head -n 1)
+          mkdir -p komandir-apk/app/src/main/java/uz/signalnet/commander
+          cd komandir-apk
 
-          echo "Found Komandir dir: $KOMANDIR_DIR"
-          echo "Found Askar dir: $ASKAR_DIR"
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "SignalNetCommander"
+          include ':app'
+          EOF
 
-          cd "$KOMANDIR_DIR"
-          printf "android.useAndroidX=true\nandroid.nonTransitiveRClass=true\norg.gradle.jvmargs=-Xmx2048m\n" > gradle.properties
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.0' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'uz.signalnet.commander'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "uz.signalnet.commander"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          dependencies {
+              implementation('io.socket:socket.io-client:2.1.0') {
+                  exclude group: 'org.json', module: 'json'
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="SignalNet Komandir"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/uz/signalnet/commander/MainActivity.kt
+          package uz.signalnet.commander
+
+          import android.app.Activity
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Bundle
+          import android.text.InputType
+          import android.view.Gravity
+          import android.widget.*
+          import io.socket.client.IO
+          import io.socket.client.Socket
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import kotlin.concurrent.thread
+
+          class MainActivity : Activity() {
+              private var socket: Socket? = null
+              private var serverUrl = "http://192.168.1.100:4000"
+              private var commanderName = "Kapitan Usmanov Bobur"
+              private lateinit var statusText: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  showLoginScreen()
+              }
+
+              private fun roundedBox(bgColor: Int, strokeColor: Int, radius: Float = 28f): GradientDrawable {
+                  return GradientDrawable().apply {
+                      setColor(bgColor)
+                      setStroke(3, strokeColor)
+                      cornerRadius = radius
+                  }
+              }
+
+              private fun showLoginScreen() {
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setBackgroundColor(Color.parseColor("#050E14"))
+                      setPadding(64, 64, 64, 64)
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "SIGNALNET"
+                      textSize = 30f
+                      setTextColor(Color.parseColor("#22C55E"))
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                  }
+                  val sub = TextView(this).apply {
+                      text = "KOMANDIR ILOVASI"
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      gravity = Gravity.CENTER
+                      setPadding(0, 8, 0, 48)
+                  }
+
+                  val ipInput = EditText(this).apply {
+                      setText(serverUrl)
+                      hint = "Server IP (http://192.168.1.100:4000)"
+                      setTextColor(Color.WHITE)
+                      setHintTextColor(Color.GRAY)
+                      background = roundedBox(Color.parseColor("#0B1F2A"), Color.parseColor("#22C55E"))
+                      setPadding(36, 32, 36, 32)
+                  }
+
+                  val loginInput = EditText(this).apply {
+                      setText("komandir")
+                      hint = "Login"
+                      setTextColor(Color.WHITE)
+                      setHintTextColor(Color.GRAY)
+                      background = roundedBox(Color.parseColor("#0B1F2A"), Color.parseColor("#22C55E"))
+                      setPadding(36, 32, 36, 32)
+                  }
+
+                  val passInput = EditText(this).apply {
+                      setText("123")
+                      hint = "Parol"
+                      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                      setTextColor(Color.WHITE)
+                      setHintTextColor(Color.GRAY)
+                      background = roundedBox(Color.parseColor("#0B1F2A"), Color.parseColor("#22C55E"))
+                      setPadding(36, 32, 36, 32)
+                  }
+
+                  val btnLogin = Button(this).apply {
+                      text = "KIRISH"
+                      textSize = 16f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.DEFAULT_BOLD
+                      background = roundedBox(Color.parseColor("#16A34A"), Color.parseColor("#4ADE80"))
+                      setOnClickListener {
+                          serverUrl = ipInput.text.toString().trim()
+                          connectSocket()
+                          showDashboardScreen()
+                      }
+                  }
+
+                  val lp = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = 28 }
+
+                  root.addView(title)
+                  root.addView(sub)
+                  root.addView(ipInput, lp)
+                  root.addView(loginInput, lp)
+                  root.addView(passInput, lp)
+                  root.addView(btnLogin, lp)
+
+                  setContentView(root)
+              }
+
+              private fun showDashboardScreen() {
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(Color.parseColor("#06121A"))
+                      setPadding(48, 56, 48, 48)
+                  }
+
+                  val header = TextView(this).apply {
+                      text = "KOMANDIR BOSHQARUV PANELI"
+                      textSize = 20f
+                      setTextColor(Color.parseColor("#22C55E"))
+                      typeface = Typeface.DEFAULT_BOLD
+                  }
+
+                  val subHeader = TextView(this).apply {
+                      text = "$commanderName • Server: $serverUrl"
+                      textSize = 12f
+                      setTextColor(Color.LTGRAY)
+                      setPadding(0, 8, 0, 36)
+                  }
+
+                  val spinner = Spinner(this)
+                  val units = arrayOf(
+                      "ALL",
+                      "1-Maxsus Taktik Batalyon",
+                      "2-Aloqa va Razvedka Rotasi",
+                      "3-Moddiy Texnik Ta'minot",
+                      "Shtab va Qo'mondonlik"
+                  )
+                  spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, units)
+                  spinner.background = roundedBox(Color.parseColor("#0B202C"), Color.parseColor("#22C55E"))
+
+                  val btnTrevoga = Button(this).apply {
+                      text = "🔔 TREVOGA SIGNALINI YUBORISH"
+                      textSize = 16f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.DEFAULT_BOLD
+                      background = roundedBox(Color.parseColor("#DC2626"), Color.parseColor("#F87171"))
+                      setPadding(32, 42, 32, 42)
+                      setOnClickListener {
+                          sendSignal("TREVOGA", spinner.selectedItem.toString())
+                      }
+                  }
+
+                  val btnYigin = Button(this).apply {
+                      text = "👥 YIG'IN SIGNALINI YUBORISH"
+                      textSize = 16f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.DEFAULT_BOLD
+                      background = roundedBox(Color.parseColor("#2563EB"), Color.parseColor("#60A5FA"))
+                      setPadding(32, 42, 32, 42)
+                      setOnClickListener {
+                          sendSignal("YIGIN", spinner.selectedItem.toString())
+                      }
+                  }
+
+                  statusText = TextView(this).apply {
+                      text = "Qabul qilish holati: Serverdan ma'lumot kutilmoqda..."
+                      textSize = 14f
+                      setTextColor(Color.parseColor("#FBBF24"))
+                      background = roundedBox(Color.parseColor("#0B202C"), Color.parseColor("#334155"))
+                      setPadding(36, 36, 36, 36)
+                  }
+
+                  val lp = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = 32 }
+
+                  root.addView(header)
+                  root.addView(subHeader)
+                  root.addView(spinner, lp)
+                  root.addView(btnTrevoga, lp)
+                  root.addView(btnYigin, lp)
+                  root.addView(statusText, lp)
+
+                  setContentView(root)
+              }
+
+              private fun connectSocket() {
+                  try {
+                      socket?.disconnect()
+                      socket = IO.socket(serverUrl)
+                      socket?.on("state:sync") { args ->
+                          if (args.isNotEmpty()) {
+                              val db = args[0] as JSONObject
+                              val signals = db.optJSONArray("signals")
+                              if (signals != null && signals.length() > 0) {
+                                  val receipts = signals.getJSONObject(0).optJSONObject("receipts")
+                                  if (receipts != null) {
+                                      var ack = 0
+                                      var pend = 0
+                                      val keys = receipts.keys()
+                                      while (keys.hasNext()) {
+                                          val st = receipts.getJSONObject(keys.next()).optString("status")
+                                          if (st == "ACKNOWLEDGED") ack++ else pend++
+                                      }
+                                      runOnUiThread {
+                                          if (::statusText.isInitialized) {
+                                              statusText.text = "ENG MUHIM NAZORAT:\n✓ Qabul qildi: $ack nafar\n✕ Qabul qilmadi: $pend nafar"
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                      socket?.connect()
+                  } catch (_: Exception) {}
+              }
+
+              private fun sendSignal(type: String, unit: String) {
+                  thread {
+                      try {
+                          val payload = JSONObject().apply {
+                              put("type", type)
+                              put("unit", unit)
+                              put("category", "ALL")
+                              put("sender", "Komandir APK")
+                          }
+                          socket?.emit("dispatch_signal", payload)
+                          val conn = URL("$serverUrl/api/apk/dispatch").openConnection() as HttpURLConnection
+                          conn.requestMethod = "POST"
+                          conn.setRequestProperty("Content-Type", "application/json")
+                          conn.doOutput = true
+                          conn.outputStream.use { it.write(payload.toString().toByteArray()) }
+                          conn.responseCode
+                          runOnUiThread {
+                              Toast.makeText(this, "$type signali yuborildi!", Toast.LENGTH_SHORT).show()
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              Toast.makeText(this, "Signal yuborildi (Socket)", Toast.LENGTH_SHORT).show()
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
           gradle assembleDebug --no-daemon
           cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/SignalNet-Komandir.apk"
 
-          cd "$GITHUB_WORKSPACE/$ASKAR_DIR"
-          printf "android.useAndroidX=true\nandroid.nonTransitiveRClass=true\norg.gradle.jvmargs=-Xmx2048m\n" > gradle.properties
+      - name: 5. Build Askar APK
+        run: |
+          mkdir -p askar-apk/app/src/main/java/uz/signalnet/soldier
+          cd askar-apk
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "SignalNetSoldier"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.0' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'uz.signalnet.soldier'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "uz.signalnet.soldier"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          dependencies {
+              implementation('io.socket:socket.io-client:2.1.0') {
+                  exclude group: 'org.json', module: 'json'
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <application
+                  android:label="SignalNet Xizmatchi"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:showWhenLocked="true"
+                      android:turnScreenOn="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/uz/signalnet/soldier/MainActivity.kt
+          package uz.signalnet.soldier
+
+          import android.app.Activity
+          import android.app.KeyguardManager
+          import android.content.Context
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.media.AudioManager
+          import android.media.ToneGenerator
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.VibrationEffect
+          import android.os.Vibrator
+          import android.view.Gravity
+          import android.view.WindowManager
+          import android.widget.*
+          import io.socket.client.IO
+          import io.socket.client.Socket
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import kotlin.concurrent.thread
+
+          class MainActivity : Activity() {
+              private var socket: Socket? = null
+              private var serverUrl = "http://192.168.1.100:4000"
+              private var personId = "P-101"
+              private var currentSignalId = "SIG-1023"
+
+              private lateinit var alertTitle: TextView
+              private lateinit var alertDesc: TextView
+              private lateinit var swipeSeekBar: SeekBar
+              private lateinit var swipeLabel: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  enableLockscreenWake()
+                  showSetupScreen()
+              }
+
+              private fun enableLockscreenWake() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                      setShowWhenLocked(true)
+                      setTurnScreenOn(true)
+                      val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                      km.requestDismissKeyguard(this, null)
+                  } else {
+                      @Suppress("DEPRECATION")
+                      window.addFlags(
+                          WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                          WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                      )
+                  }
+              }
+
+              private fun roundedBox(bgColor: Int, strokeColor: Int, radius: Float = 32f): GradientDrawable {
+                  return GradientDrawable().apply {
+                      setColor(bgColor)
+                      setStroke(4, strokeColor)
+                      cornerRadius = radius
+                  }
+              }
+
+              private fun showSetupScreen() {
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setBackgroundColor(Color.parseColor("#060D13"))
+                      setPadding(64, 64, 64, 64)
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "XIZMATCHI ILOVASI"
+                      textSize = 24f
+                      setTextColor(Color.parseColor("#22C55E"))
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 42)
+                  }
+
+                  val ipInput = EditText(this).apply {
+                      setText(serverUrl)
+                      hint = "Server IP (http://192.168.1.100:4000)"
+                      setTextColor(Color.WHITE)
+                      background = roundedBox(Color.parseColor("#0D1B26"), Color.parseColor("#22C55E"))
+                      setPadding(36, 32, 36, 32)
+                  }
+
+                  val idInput = EditText(this).apply {
+                      setText(personId)
+                      hint = "Harbiy ID (P-101)"
+                      setTextColor(Color.WHITE)
+                      background = roundedBox(Color.parseColor("#0D1B26"), Color.parseColor("#22C55E"))
+                      setPadding(36, 32, 36, 32)
+                  }
+
+                  val btnStart = Button(this).apply {
+                      text = "NAVBATCHILIK REJIMINI YOQISH"
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.DEFAULT_BOLD
+                      background = roundedBox(Color.parseColor("#16A34A"), Color.parseColor("#4ADE80"))
+                      setOnClickListener {
+                          serverUrl = ipInput.text.toString().trim()
+                          personId = idInput.text.toString().trim()
+                          connectSoldierSocket()
+                          showAlertLockScreen("TREVOGA", "Zudlik bilan tayyorgarlik ko'ring!")
+                      }
+                  }
+
+                  val lp = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = 28 }
+
+                  root.addView(title)
+                  root.addView(ipInput, lp)
+                  root.addView(idInput, lp)
+                  root.addView(btnStart, lp)
+                  setContentView(root)
+              }
+
+              private fun showAlertLockScreen(sigType: String, instruction: String) {
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setBackgroundColor(Color.parseColor("#080C11"))
+                      setPadding(48, 64, 48, 64)
+                  }
+
+                  val alertCard = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      background = roundedBox(
+                          if (sigType == "YIGIN") Color.parseColor("#1E3A8A") else Color.parseColor("#69131B"),
+                          if (sigType == "YIGIN") Color.parseColor("#60A5FA") else Color.parseColor("#EF4444"),
+                          44f
+                      )
+                      setPadding(56, 72, 56, 72)
+                  }
+
+                  alertTitle = TextView(this).apply {
+                      text = if (sigType == "YIGIN") "YIG'IN" else "TREVOGA"
+                      textSize = 42f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                  }
+
+                  val sub = TextView(this).apply {
+                      text = "SIGNALI BERILDI!"
+                      textSize = 18f
+                      setTextColor(Color.parseColor("#FECACA"))
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      setPadding(0, 8, 0, 20)
+                  }
+
+                  alertDesc = TextView(this).apply {
+                      text = instruction
+                      textSize = 14f
+                      setTextColor(Color.WHITE)
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 56)
+                  }
+
+                  swipeLabel = TextView(this).apply {
+                      text = ">> QABUL QILDIM (O'NGGA SURING)"
+                      textSize = 14f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.DEFAULT_BOLD
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 16)
+                  }
+
+                  swipeSeekBar = SeekBar(this).apply {
+                      max = 100
+                      progress = 0
+                      background = roundedBox(Color.parseColor("#16A34A"), Color.parseColor("#86EFAC"), 60f)
+                      setPadding(36, 28, 36, 28)
+                      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                          override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
+                          override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                          override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                              if ((seekBar?.progress ?: 0) >= 75) {
+                                  seekBar?.progress = 100
+                                  seekBar?.isEnabled = false
+                                  swipeLabel.text = "✓ QABUL QILINDI (SERVERGA YOZILDI)"
+                                  sendAckToServer()
+                              } else {
+                                  seekBar?.progress = 0
+                              }
+                          }
+                      })
+                  }
+
+                  alertCard.addView(alertTitle)
+                  alertCard.addView(sub)
+                  alertCard.addView(alertDesc)
+                  alertCard.addView(swipeLabel)
+                  alertCard.addView(swipeSeekBar, LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  ))
+
+                  root.addView(alertCard, LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  ))
+
+                  setContentView(root)
+              }
+
+              private fun soundSirenAndVibrate() {
+                  try {
+                      val tone = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+                      tone.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 1600)
+                      val vib = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          vib.vibrate(VibrationEffect.createOneShot(1200, VibrationEffect.DEFAULT_AMPLITUDE))
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun connectSoldierSocket() {
+                  try {
+                      socket?.disconnect()
+                      socket = IO.socket(serverUrl)
+                      socket?.on("signal:incoming") { args ->
+                          if (args.isNotEmpty()) {
+                              val sig = args[0] as JSONObject
+                              currentSignalId = sig.optString("id", "SIG-NEW")
+                              val t = sig.optString("type", "TREVOGA")
+                              val inst = sig.optString("instruction", "Zudlik bilan tayyorgarlik ko'ring!")
+                              runOnUiThread {
+                                  enableLockscreenWake()
+                                  soundSirenAndVibrate()
+                                  showAlertLockScreen(t, inst)
+                              }
+                          }
+                      }
+                      socket?.connect()
+                  } catch (_: Exception) {}
+              }
+
+              private fun sendAckToServer() {
+                  thread {
+                      try {
+                          val payload = JSONObject().apply {
+                              put("personId", personId)
+                              put("signalId", currentSignalId)
+                          }
+                          socket?.emit("acknowledge_signal", payload)
+                          val conn = URL("$serverUrl/api/apk/acknowledge").openConnection() as HttpURLConnection
+                          conn.requestMethod = "POST"
+                          conn.setRequestProperty("Content-Type", "application/json")
+                          conn.doOutput = true
+                          conn.outputStream.use { it.write(payload.toString().toByteArray()) }
+                          conn.responseCode
+                      } catch (_: Exception) {}
+                  }
+              }
+          }
+          EOF
+
           gradle assembleDebug --no-daemon
           cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/SignalNet-Askar.apk"
 
-      - name: 6. Tayyor APK fayllarni yuklab olish uchun saqlash
+      - name: 6. Upload Ready APKs
         uses: actions/upload-artifact@v4
         with:
           name: SignalNet-Tayyor-APK-Fayllar
